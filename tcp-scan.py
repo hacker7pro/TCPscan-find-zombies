@@ -1,145 +1,96 @@
-#!/usr/bin/env python3
-# chaos_blaster_god_final.py
-# 2025 Tamil GOD MODE – 3 IP Formats + Full Shuffle + Source Port Control
-# sudo python3 chaos_blaster_god_final.py
-
-from scapy.all import IP, TCP, send
+from scapy.all import IP, TCP, sr1
+import nmap
 import ipaddress
-import random
 import time
-import signal
-import sys
-import re
 
-# Clean Ctrl+C
-def stop(sig, frame):
-    print(f"\n\nCHAOS STOPPED BY USER!")
-    print(f"Total packets sent: {sent:,}")
-    sys.exit(0)
-signal.signal(signal.SIGINT, stop)
+def check_zombie_candidate(ip, zombie_port=80, count=3):
+    ids = []
+    print(f"[*] Probing {ip}:{zombie_port} for IP ID behavior...")
 
-print("""
-  ███████╗ █████╗ ███████╗████████╗    ████████╗ ██████╗██████╗ 
-  ██╔════╝██╔══██╗██╔════╝╚══██╔══╝    ╚══██╔══╝██╔════╝██╔══██╗
-  █████╗  ███████║███████╗   ██║          ██║   ██║     ██████╔╝
-  ██╔══╝  ██╔══██║╚════██║   ██║          ██║   ██║     ██╔═══╝ 
-  ██║     ██║  ██║███████║   ██║          ██║   ╚██████╗██║     
-  ╚═╝     ╚═╝  ╚═╝╚══════╝   ╚═╝          ╚═╝    ╚═════╝╚═╝     
-                                                                by abd0xa23(AR)                 
-                                                                
-                                                                
-                                                                
-                                                                                       """)
-
-# ============== IP INPUT + PARSING ==============
-def parse_ip_input(user_input):
-    user_input = user_input.strip()
-    ips = []
-
-    # Format 1: CIDR (192.168.1.0/24)
-    if '/' in user_input:
-        try:
-            net = ipaddress.ip_network(user_input, strict=False)
-            ips = [str(ip) for ip in net.hosts()] if net.num_addresses > 1 else [str(net.network_address)]
-            print(f"CIDR detected → {len(ips)} hosts")
-            return ips
-        except:
-            pass
-
-    # Format 2: Single IP (192.168.1.10)
-    try:
-        ipaddress.ip_address(user_input)
-        print("Single IP detected")
-        return [user_input]
-    except:
-        pass
-
-    # Format 3: Range 192.168.3.10-225
-    range_match = re.match(r'^(\d+\.\d+\.\d+)\.(\d+)-(\d+)$', user_input)
-    if range_match:
-        prefix = range_match.group(1)
-        start = int(range_match.group(2))
-        end = int(range_match.group(3))
-        if 0 <= start <= end <= 255:
-            ips = [f"{prefix}.{i}" for i in range(start, end + 1)]
-            print(f"IP Range detected → {len(ips)} hosts ({start}-{end})")
-            return ips
-
-    print("Invalid IP format! Using loopback.")
-    return ["127.0.0.1"]
-
-# ============== USER INPUT ==============
-target_input   = input("Target IP(s): 192.168.1.0/24 | 192.168.1.10 | 192.168.3.10-225 → ").strip()
-srcport_input  = input("Source Port (5000-6000 or 8080 or Enter=RANDOM): ").strip()
-ports_input    = input("Target Port(s) (ex: 80 or 22,80,443 or 1-1000): ").strip()
-flags_input    = input("TCP Flags (S,SA,A,RA,F,FA,PA) [default S]: ").strip().upper() or "S"
-delay_ms       = float(input("Delay ms (0 = max speed): ").strip() or "0")
-
-
-# ============== PARSE IPs ==============
-all_ips = parse_ip_input(target_input)
-
-# ============== SOURCE PORT ==============
-src_ports = None
-if srcport_input:
-    try:
-        if "-" in srcport_input:
-            s, e = map(int, srcport_input.split("-"))
-            src_ports = list(range(s, e + 1))
-            print(f"Source port range: {s}-{e}")
+    for _ in range(count):
+        pkt = IP(dst=ip)/TCP(dport=zombie_port, flags='SA')
+        response = sr1(pkt, timeout=1, verbose=0)
+        if response and response.haslayer(IP):
+            ids.append(response[IP].id)
         else:
-            src_ports = [int(srcport_input)]
-            print(f"Source port fixed: {srcport_input}")
-    except:
-        src_ports = None
-if not src_ports:
-    print("Source port = RANDOM per packet")
+            print(f"[-] No response from {ip}, skipping.")
+            return False
+        time.sleep(1)
 
-# ============== TARGET PORTS ==============
-def parse_ports(p):
-    ports = set()
-    for part in p.replace(" ", "").split(","):
-        if "-" in part:
-            s, e = map(int, part.split("-"))
-            ports.update(range(s, e + 1))
-        else:
-            try: ports.add(int(part))
-            except: pass
-    return list(ports)
+    if len(ids) >= 2 and all(ids[i+1] > ids[i] for i in range(len(ids)-1)):
+        print(f"\n[+] {ip} shows predictable IP ID behavior (potential zombie).")
+        return True
+    else:
+        print(f"[-] {ip} is not a suitable zombie.")
+        return False
 
-target_ports = parse_ports(ports_input) or [80]
-print(f"Target ports: {target_ports}")
+def find_zombie_in_range(ip_range, zombie_port):
+    for ip in ipaddress.IPv4Network(ip_range, strict=False):
+        ip_str = str(ip)
+        if check_zombie_candidate(ip_str, zombie_port=zombie_port):
+            print(f"\n[+] Zombie candidate found: {ip_str}")
+            choice = input("Use this zombie IP? (y/n): ").strip().lower()
+            if choice == 'y':
+                return ip_str
+            else:
+                print("[*] Searching for next zombie...\n")
+    return None
 
-# ============== FLAGS ==============
-flag_map = {"S":0x02,"SA":0x12,"A":0x10,"RA":0x14,"R":0x04,"F":0x01,"FA":0x11,"PA":0x18}
-flags = sum(flag_map.get(f,0) for f in flags_input) or 0x02
 
-# ============== CHAOS COMBOS + SHUFFLE ==============
-combos = [(ip, port) for ip in all_ips for port in target_ports]
-random.shuffle(combos)
-total = len(combos)
+def zombie_scan(target, zombie_host, target_port, source_port):
+    nm = nmap.PortScanner()
+    print(f"\n[+] Launching Zombie scan with OS detection on {target}:{target_port} using zombie {zombie_host} and source port {source_port}...\n")
+    try:
+        # -g sets the source port; -sI sets the zombie host
+        args = f'-sI {zombie_host} -p {target_port} -O -Pn -v -g {source_port}'
+        nm.scan(hosts=target, arguments=args)
 
-print(f"\nTotal unique combos: {total:,}")
-print("First 5 chaos targets:")
-for i in range(min(5, total)):
-    print(f"  → {combos[i][0]}:{combos[i][1]}")
-print(f"\nSTARTING... Press Ctrl+C to stop!\n")
-time.sleep(3)
+        for host in nm.all_hosts():
+            print(f"\nHost: {host} ({nm[host].hostname()})")
+            print(f"State: {nm[host].state()}")
 
-# ============== BLAST ==============
-sent = 0
-for ip, port in combos:
-    sport = random.choice(src_ports) if src_ports else random.randint(1024, 65535)
-    pkt = IP(dst=ip) / TCP(sport=sport, dport=port, flags=flags)
-    send(pkt, verbose=0)
-    sent += 1
+            # Port scan result
+            if 'tcp' in nm[host] and target_port in nm[host]['tcp']:
+                port_data = nm[host]['tcp'][target_port]
+                print(f"Port: {target_port}/tcp\tState: {port_data['state']}")
+            else:
+                print(f"Port {target_port} not found or filtered.")
 
-    if sent <= 5 or sent % 3000 == 0 or sent == total:
-        print(f"Sent {sent:,}/{total:,} → {ip}:{port} (src_port={sport})")
+            # OS Detection
+            if 'osmatch' in nm[host]:
+                print("\nOS Detection:")
+                for os in nm[host]['osmatch']:
+                    print(f" - {os['name']} ({os['accuracy']}% accuracy)")
 
-    if delay_ms > 0:
-        time.sleep(delay_ms / 1000.0)
+            # MAC & Vendor
+            if 'mac' in nm[host]['addresses']:
+                mac = nm[host]['addresses']['mac']
+                vendor = nm[host]['vendor'].get(mac, 'Unknown')
+                print(f"\nMAC Address: {mac}")
+                print(f"Vendor: {vendor}")
 
-print(f"\nMISSION COMPLETED!")
-print(f"All {total:,} unique IP+Port combos blasted in pure random order!")
-print("Undetectable | No pattern | Professional red team level!\n")
+        return True
+    except Exception as e:
+        print(f"[-] Error during zombie scan: {e}")
+        return False
+
+if __name__ == "__main__":
+    print("=== Zombie Scanner with OS & Hardware Info ===")
+    zombie_range = input("Enter zombie IP range (e.g., 192.168.1.0/24): ")
+    zombie_port = int(input("Enter port to probe zombie candidates (e.g., 80): "))
+    target_port = int(input("Enter target port to scan (e.g., 22): "))
+    target_ip = input("Enter target IP for zombie scan: ")
+    source_port = int(input("Enter source port to use for the scan (e.g., 4444): "))
+
+    zombie_ip = find_zombie_in_range(zombie_range, zombie_port)
+
+    if zombie_ip:
+        print(f"\n[+] Potential zombie found: {zombie_ip}")
+        print("[*] Proceeding with zombie scan including OS and hardware info...\n")
+
+        scan_success = zombie_scan(target_ip, zombie_ip, target_port, source_port)
+
+        if not scan_success:
+            print("[-] Zombie scan failed.")
+    else:
+        print("[-] No suitable zombie found in the given range.")
